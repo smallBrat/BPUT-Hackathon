@@ -1,106 +1,61 @@
 import cv2
-import argparse
-import supervision as sv
-import numpy as np
-import pyttsx3
 import time
-
+import pyttsx3
 from ultralytics import YOLO
 
-ZONE_POLYGON = np.array([
-    [0, 0],
-    [0.5, 0],
-    [0.5, 1],
-    [0, 1]
-])
+# Initialize YOLOv8 model
+model = YOLO('yolov8n.pt')  # Use the YOLOv8 model (replace with your model if needed)
 
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="YOLOv8 live")
-    parser.add_argument(
-        "--webcam-resolution",
-        default=[1280, 720],
-        nargs=2,
-        type=int
-    )
-    args = parser.parse_args()
-    return args
+# Initialize text-to-speech engine
+engine = pyttsx3.init()
+engine.setProperty('rate', 150)  # Adjust the speech rate
 
-def main():
-    args = parse_arguments()
-    frame_width, frame_height = args.webcam_resolution
+# Capture phone camera feed via IP (replace with your phone camera IP stream URL)
+phone_camera_url = "http://192.168.1.101:8080/video"  # Example IP (update with actual)
+phone_cam = cv2.VideoCapture(phone_camera_url)
 
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+# Check if the stream is accessible
+if not phone_cam.isOpened():
+    print("Error: Unable to access the phone camera stream.")
+    exit()
 
-    model = YOLO("yolov8n.pt")
+# Timer for speech announcements
+last_announcement_time = time.time()
 
-    box_annotator = sv.BoxAnnotator(
-        thickness=2,
-        text_thickness=2,
-        text_scale=1
-    )
+# Process video feed
+while True:
+    # Read frame from the phone camera
+    ret, frame = phone_cam.read()
+    if not ret:
+        print("Failed to read from the phone camera.")
+        break
 
-    zone_polygon = (ZONE_POLYGON * np.array(args.webcam_resolution)).astype(int)
-    zone = sv.PolygonZone(polygon=zone_polygon, frame_resolution_wh=tuple(args.webcam_resolution))
-    zone_annotator = sv.PolygonZoneAnnotator(
-        zone=zone,
-        color=sv.Color.red(),
-        thickness=2,
-        text_thickness=4,
-        text_scale=2
-    )
+    # Resize frame for better performance and portrait display
+    frame = cv2.resize(frame, (360, 640))  # Adjust size as needed
 
-    # Initialize pyttsx3
-    tts_engine = pyttsx3.init()
-    tts_engine.setProperty("rate", 150)  # Set speech rate
-    last_announced = {}  # Dictionary to store last announced time for each object
+    # YOLOv8 predictions
+    results = model.predict(source=frame, show=False)  # Phone camera
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # Get detected object names
+    detected_objects = [result.names[class_id] for result in results for class_id in result.boxes.cls]
 
-        result = model(frame, agnostic_nms=True)[0]
-        detections = sv.Detections.from_yolov8(result)
+    # Make an announcement every 10 seconds
+    current_time = time.time()
+    if current_time - last_announcement_time > 10 and detected_objects:
+        objects_to_announce = ", ".join(set(detected_objects))  # Avoid duplicate object names
+        announcement = f"Detected objects are: {objects_to_announce}."
+        print(announcement)
+        engine.say(announcement)
+        engine.runAndWait()
+        last_announcement_time = current_time
 
-        labels = [
-            f"{model.model.names[class_id]} {confidence:0.2f}"
-            for _, confidence, class_id, _
-            in detections
-        ]
-        frame = box_annotator.annotate(
-            scene=frame,
-            detections=detections,
-            labels=labels
-        )
+    # Display results
+    cv2.imshow("Phone Camera - YOLOv8", results[0].plot())
 
-        # Trigger zone detection
-        zone.trigger(detections=detections)
-        frame = zone_annotator.annotate(scene=frame)
+    # Exit loop on pressing 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-        # Announce detected objects with a 5-second interval
-        current_time = time.time()
-        current_objects = {
-            model.model.names[class_id]: current_time
-            for _, _, class_id, _
-            in detections
-        }
-
-        for obj, timestamp in current_objects.items():
-            if obj not in last_announced or (current_time - last_announced[obj]) > 10:
-
-                tts_engine.say(f"Detected {obj}")
-                tts_engine.runAndWait()
-                last_announced[obj] = current_time
-
-        cv2.imshow("YOLOv8", frame)
-
-        if cv2.waitKey(30) == 27:  # Press 'Esc' key to exit
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()
+# Release resources
+phone_cam.release()
+cv2.destroyAllWindows()
