@@ -1,0 +1,7 @@
+pip install opencv-python
+pip install argparse
+pip install supervision
+pip install numpy
+pip install pandas
+pip install pyttsx3
+pip install TIME-python
